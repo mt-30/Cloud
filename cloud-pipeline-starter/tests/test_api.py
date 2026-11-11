@@ -55,3 +55,38 @@ def test_delete_task_not_found(client):
 
     assert result.status_code == 404
     assert result.json["error"] == "tarefa nao encontrada"
+
+def test_filter_tasks_by_status(client):
+    # Cria duas tarefas
+    task1 = client.post(
+        "/tasks",
+        json={"title": "Estudar Python"}
+    ).json
+
+    client.post(
+        "/tasks",
+        json={"title": "Estudar Docker"}
+    )
+
+    # Marca a primeira como concluída
+    client.patch(
+        f'/tasks/{task1["id"]}',
+        json={"done": True}
+    )
+
+    # Busca somente as concluídas
+    completed = client.get("/tasks?done=true")
+    assert completed.status_code == 200
+    assert len(completed.json) == 1
+    assert completed.json[0]["title"] == "Estudar Python"
+
+    # Busca somente as pendentes
+    pending = client.get("/tasks?done=false")
+    assert pending.status_code == 200
+    assert len(pending.json) == 1
+    assert pending.json[0]["title"] == "Estudar Docker"
+
+    # Busca todas
+    all_tasks = client.get("/tasks")
+    assert len(all_tasks.json) == 2
+
