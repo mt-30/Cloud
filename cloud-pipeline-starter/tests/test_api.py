@@ -37,3 +37,21 @@ def test_mark_done(client):
 
 def test_not_found(client):
     assert client.patch("/tasks/999", json={"done": True}).status_code == 404
+
+def test_delete_task_success(client):
+    item = client.post(
+        "/tasks",
+        json={"title": "Tarefa para excluir"}
+    ).json
+
+    result = client.delete(f'/tasks/{item["id"]}')
+
+    assert result.status_code == 204
+    assert client.get("/tasks").json == []
+
+
+def test_delete_task_not_found(client):
+    result = client.delete("/tasks/999")
+
+    assert result.status_code == 404
+    assert result.json["error"] == "tarefa nao encontrada"
