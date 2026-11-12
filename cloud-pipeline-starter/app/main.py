@@ -36,31 +36,31 @@ def create_app(test_config=None):
         except sqlite3.Error:
             return jsonify(status="error"), 503
 
-@app.get("/tasks")
-def list_tasks():
-    done_filter = request.args.get("done")
+    @app.get("/tasks")
+    def list_tasks():
+        done_filter = request.args.get("done")
 
-    with connect() as db:
-        if done_filter is None:
-            items = db.execute(
-                "SELECT id, title, done FROM tasks ORDER BY id"
-            ).fetchall()
+        with connect() as db:
+            if done_filter is None:
+                items = db.execute(
+                    "SELECT id, title, done FROM tasks ORDER BY id"
+                ).fetchall()
 
-        elif done_filter.lower() in ("true", "false"):
-            status = 1 if done_filter.lower() == "true" else 0
+            elif done_filter.lower() in ("true", "false"):
+                status = 1 if done_filter.lower() == "true" else 0
 
-            items = db.execute(
-                "SELECT id, title, done FROM tasks WHERE done = ? ORDER BY id",
-                (status,)
-            ).fetchall()
+                items = db.execute(
+                    "SELECT id, title, done FROM tasks WHERE done = ? ORDER BY id",
+                    (status,)
+                ).fetchall()
 
-        else:
-            return jsonify(error="O filtro done deve ser true ou false"), 400
+            else:
+                return jsonify(error="O filtro done deve ser true ou false"), 400
 
-    return jsonify([
-        dict(id=r["id"], title=r["title"], done=bool(r["done"]))
-        for r in items
-    ])
+        return jsonify([
+            dict(id=r["id"], title=r["title"], done=bool(r["done"]))
+            for r in items
+        ])
 
     @app.post("/tasks")
     def create_task():
