@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   deploy:
-    # Deploy only after successful CI from a push to main.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
@@ -63,7 +62,7 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o ConnectTimeout=15 \
             "${EC2_USER}@${EC2_HOST}" \
-            "bash -s -- '${IMAGE}'" < scripts/deploy.sh
+            "bash -s -- '${IMAGE}'" < script/deploy.sh
 
       - name: Verify remote endpoint
         env:
