@@ -31,8 +31,15 @@ jobs:
           SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
           KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
         run: |
-          test -n "$SSH_KEY"
-          test -n "$KNOWN_HOSTS"
+          test -n "$SSH_KEY" || {
+            echo "ERRO: EC2_SSH_KEY está vazio."
+            exit 1
+          }
+
+          test -n "$KNOWN_HOSTS" || {
+            echo "ERRO: EC2_KNOWN_HOSTS está vazio."
+            exit 1
+          }
 
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
@@ -43,11 +50,28 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/known_hosts
 
+      - name: Locate deployment script
+        id: locate
+        run: |
+          DEPLOY_SCRIPT="$(find . -type f -name 'deploy.sh' \
+            -not -path './.git/*' -print -quit)"
+
+          if [ -z "$DEPLOY_SCRIPT" ]; then
+            echo "ERRO: deploy.sh não foi encontrado."
+            echo "Estrutura de arquivos do repositório:"
+            find . -maxdepth 5 -type f
+            exit 1
+          fi
+
+          echo "Arquivo encontrado: $DEPLOY_SCRIPT"
+          echo "path=$DEPLOY_SCRIPT" >> "$GITHUB_OUTPUT"
+
       - name: Deploy immutable image
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ vars.EC2_USER }}
           DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEPLOY_SCRIPT: ${{ steps.locate.outputs.path }}
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${DEPLOY_SHA}"
 
@@ -57,12 +81,16 @@ jobs:
           [[ "$EC2_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
           [[ "$EC2_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
 
+          echo "Imagem: $IMAGE"
+          echo "Script: $DEPLOY_SCRIPT"
+          echo "Iniciando deploy na EC2..."
+
           ssh \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -o ConnectTimeout=15 \
             "${EC2_USER}@${EC2_HOST}" \
-            "bash -s -- '${IMAGE}'" < script/deploy.sh
+            "bash -s -- '${IMAGE}'" < "$DEPLOY_SCRIPT"
 
       - name: Verify remote endpoint
         env:
@@ -73,6 +101,8 @@ jobs:
 
           [[ "$PORT" =~ ^[0-9]+$ ]]
 
+          echo "Verificando API na EC2..."
+
           curl \
             --fail \
             --show-error \
@@ -80,3 +110,5 @@ jobs:
             --retry-delay 5 \
             --retry-all-errors \
             "http://${EC2_HOST}:${PORT}/health"
+
+          echo "Deploy e verificação concluídos!"
