@@ -47,16 +47,16 @@ jobs:
     name: Docker Build and Test
     needs: quality-and-tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./cloud-pipeline-starter
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Build Docker image
-        run: |
-          docker build \
-            -t cloud-tasks-api:test \
-            ./cloud-pipeline-starter
+        run: docker build -t cloud-tasks-api:test .
 
       - name: Run Docker container
         run: |
@@ -88,6 +88,9 @@ jobs:
     needs: docker-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./cloud-pipeline-starter
 
     outputs:
       image_uri: ${{ steps.build-image.outputs.image_uri }}
@@ -109,10 +112,7 @@ jobs:
           REPO_LOWER="${GITHUB_REPOSITORY,,}"
           IMAGE_URI="ghcr.io/${REPO_LOWER}:${GITHUB_SHA}"
 
-          docker build \
-            -t "$IMAGE_URI" \
-            ./cloud-pipeline-starter
-
+          docker build -t "$IMAGE_URI" .
           docker push "$IMAGE_URI"
           echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
