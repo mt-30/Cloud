@@ -1,27 +1,20 @@
-
 name: Cloud Tasks API - CI CD
 
 on:
   pull_request:
     branches: ["main"]
-
   push:
     branches: ["main"]
 
 permissions:
   contents: read
-
-env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  packages: write
 
 jobs:
-
   # ETAPA 1 - QUALIDADE E TESTES
   quality-and-tests:
     name: Quality and Pytest
     runs-on: ubuntu-latest
-
     defaults:
       run:
         working-directory: ./cloud-pipeline-starter
@@ -49,7 +42,6 @@ jobs:
       - name: Run automated tests
         run: python -m pytest -v
 
-
   # ETAPA 2 - BUILD E TESTE DO DOCKER
   docker-test:
     name: Docker Build and Test
@@ -70,7 +62,7 @@ jobs:
         run: |
           docker run -d \
             --name cloud-tasks-test \
-            -p 8080:5000 \
+            -p 8080:8000 \
             cloud-tasks-api:test
 
       - name: Wait and test API health
@@ -88,17 +80,13 @@ jobs:
 
       - name: Stop test container
         if: always()
-        run: |
-          docker rm -f cloud-tasks-test || true
+        run: docker rm -f cloud-tasks-test || true
 
-
-  # ETAPA 3 - PUBLICAR IMAGEM NO AMAZON ECR
-  publish-ecr:
-    name: Publish Image to Amazon ECR
+  # ETAPA 3 - PUBLICAR IMAGEM NO GHCR (SOMENTE PUSH NA MAIN)
+  publish-ghcr:
+    name: Publish Image to GHCR
     needs: docker-test
-
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
     runs-on: ubuntu-latest
 
     outputs:
@@ -108,114 +96,50 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push immutable image
         id: build-image
-        env:
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          IMAGE_TAG: ${{ github.sha }}
         run: |
-          REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-          IMAGE_URI="${REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          REPO_LOWER="${GITHUB_REPOSITORY,,}"
+          IMAGE_URI="ghcr.io/${REPO_LOWER}:${GITHUB_SHA}"
 
           docker build \
             -t "$IMAGE_URI" \
             ./cloud-pipeline-starter
 
           docker push "$IMAGE_URI"
-
           echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
-
-          echo "Imagem publicada: $IMAGE_URI"
-
 
   # ETAPA 4 - DEPLOY NA EC2
   deploy-ec2:
     name: Deploy to AWS EC2
-    needs: publish-ecr
-
+    needs: publish-ghcr
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ env.AWS_REGION }}
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Configure SSH
         env:
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
         run: |
           mkdir -p ~/.ssh
-
           printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2_key
           chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
-          printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-
-      - name: Login EC2 to Amazon ECR
+      - name: Deploy immutable image
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          EC2_USER: ${{ vars.EC2_USER }}
+          IMAGE_URI: ${{ needs.publish-ghcr.outputs.image_uri }}
         run: |
-          REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
-          aws ecr get-login-password --region "$AWS_REGION" |
-            ssh -i ~/.ssh/ec2_key \
-              -o StrictHostKeyChecking=yes \
-              "$EC2_USER@$EC2_HOST" \
-              "sudo docker login --username AWS --password-stdin '$REGISTRY'"
-
-      - name: Pull and run application
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-          IMAGE_URI: ${{ needs.publish-ecr.outputs.image_uri }}
-        run: |
-          ssh -i ~/.ssh/ec2_key \
-            -o StrictHostKeyChecking=yes \
-            "$EC2_USER@$EC2_HOST" \
-            "sudo docker pull '$IMAGE_URI' &&
-             (sudo docker rm -f cloud-tasks-api || true) &&
-             sudo docker run -d \
-               --name cloud-tasks-api \
-               --restart unless-stopped \
-               -p 8080:5000 \
-               -e DB_PATH=/data/cloud_tasks.db \
-               -v cloud_tasks_data:/data \
-               '$IMAGE_URI'"
-
-      - name: Verify deployment health
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-        run: |
-          ssh -i ~/.ssh/ec2_key \
-            -o StrictHostKeyChecking=yes \
-            "$EC2_USER@$EC2_HOST" \
-            "for i in \$(seq 1 30); do
-               if curl -fsS http://localhost:8080/health; then
-                 echo 'Deploy realizado com sucesso!'
-                 exit 0
-               fi
-               sleep 2
-             done
-             sudo docker logs cloud-tasks-api
-             exit 1"
-
+          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "bash -s" -- "$IMAGE_URI" < ./cloud-pipeline-starter/scripts/deploy.sh
